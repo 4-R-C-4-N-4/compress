@@ -86,17 +86,6 @@ The escape probability is calculated as:
 where d = number of distinct symbols seen in this context.
 (This is the PPMD "Method D" exclusion technique.)
 
-### Context mixing
-
-Rather than pure escape (which is binary: either you encode here or escape),
-blend predictions from all orders 0..N weighted by their track record:
-
-  P(byte) = Σ w_k * P_k(byte | context_k)
-
-Weights w_k are updated online using the "logistic mixing" approach:
-each order's weight increases when it predicts well, decreases when it
-doesn't. Both sides compute this identically.
-
 ### Seed integration
 
 The seed prior provides the INITIAL counts for each context.
@@ -145,39 +134,7 @@ fingerprint: [u8; N]          ← base-188 integrity check
 ---                           ← separator
 <arithmetic coded bitstream>  ← the actual compressed data
 ```
-
-## Implementation Strategy
-
-### Phase 1: PPM + Escape (no seeds yet)
-- Replace fixed-order with PPM escape mechanism
-- Add context mixing across orders 0..max_order
-- Benchmark: should beat current coder by 15-30% on all data types
-
-### Phase 2: Seed infrastructure
-- Build seed training pipeline (corpus → frozen counts)
-- Implement blended model (seed + adaptive)
-- Ship with seed 0 (null/uniform) as baseline
-
-### Phase 3: Trained seeds
-- Train english/code/json/binary/log seeds
-- Implement auto-detection
-- Benchmark against zlib, bzip2, zstd
-
-### Phase 4: Model transfer ("recipe mode")
+### Model transfer ("recipe mode")
 - After encoding file A, export trained model as a custom seed
 - Encode file B using A's model: if similar, B is tiny
 - This is the "send a seed, regenerate the data" vision
-
-## Expected Performance
-
-| Data type    | Current | Phase 1 (PPM) | Phase 3 (seeded) |
-|-------------|---------|----------------|-------------------|
-| English 1K  | 62%     | ~45%           | ~30%              |
-| English 50K | 40%     | ~25%           | ~18%              |
-| JSON 10K    | 55%     | ~35%           | ~22%              |
-| Random 10K  | 100%    | ~100%          | ~100%             |
-| Log files   | 45%     | ~30%           | ~15%              |
-
-Random data is incompressible regardless — that's the honest baseline.
-Structured data with a matching seed should approach the theoretical
-entropy limit much faster than pure adaptive learning.

@@ -54,17 +54,27 @@ class TestPPMOrder:
         assert total == 2
         assert distinct == 2
 
-    def test_seed_counts_blended(self):
-        """Verify seed priors are blended into distribution."""
+    def test_seed_as_fallback_prior(self):
+        """Seed used as fallback when no adaptive data; replaced once adaptive data exists."""
         seed = {b"": [0] * NUM_SYMBOLS}
         seed[b""][65] = 10  # 'A' has seed count 10
+        seed[b""][66] = 5   # 'B' has seed count 5
 
         order = PPMOrder(order=0, seed_counts=seed)
-        order.update(b"", 65)  # Add 1 adaptive count for 'A'
 
+        # Before any adaptive data: seed counts are used
         counts, total, distinct = order.get_distribution(b"")
-        assert counts[65] == 11  # 10 seed + 1 adaptive
-        assert total == 11
+        assert counts[65] == 10
+        assert counts[66] == 5
+        assert total == 15
+        assert distinct == 2
+
+        # After adaptive data: only adaptive counts used
+        order.update(b"", 65)
+        counts, total, distinct = order.get_distribution(b"")
+        assert counts[65] == 1  # adaptive only
+        assert counts[66] == 0  # seed dropped
+        assert total == 1
         assert distinct == 1
 
 

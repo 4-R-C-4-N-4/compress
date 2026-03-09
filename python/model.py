@@ -21,10 +21,15 @@ class PPMOrder:
 
         Applies exclusion filtering: symbols already excluded by higher
         orders are masked out (PPMD exclusion).
+
+        Seed acts as a fallback prior: if the adaptive model has data for
+        this context, use adaptive counts only. If not, use seed counts.
+        This keeps the escape probability tight once real data arrives.
         """
         ctx = context[-self.order:] if self.order > 0 else b""
         raw = self.counts[ctx]
         seed_raw = self.seed.get(ctx)
+        has_adaptive = self.totals[ctx] > 0
 
         counts = [0] * NUM_SYMBOLS
         distinct = 0
@@ -33,7 +38,10 @@ class PPMOrder:
         for s in range(NUM_SYMBOLS):
             if exclusions and exclusions[s]:
                 continue
-            c = raw[s] + (seed_raw[s] if seed_raw else 0)
+            if has_adaptive:
+                c = raw[s]
+            else:
+                c = (seed_raw[s] if seed_raw else 0)
             if c > 0:
                 counts[s] = c
                 total += c
@@ -66,18 +74,39 @@ class OrderMinus1:
     order = -1
 
 
-class PPMModel:
-    """Full PPM model with escape mechanism and optional logistic mixing.
+SEED_WEIGHT = 256  # max total counts per seed context
 
-    For Phase 1, we use pure escape (no mixing weights) — this is the
-    standard PPMD approach. Mixing can be layered on in Phase 2.
+
+def _scale_seed_order(order_counts, target_total):
+    """Scale seed counts so each context's total is at most target_total.
+
+    Preserves ratios. Non-zero counts stay >= 1.
+    """
+    scaled = {}
+    for ctx, syms in order_counts.items():
+        total = sum(syms)
+        if total <= target_total:
+            scaled[ctx] = syms
+            continue
+        factor = target_total / total
+        new_syms = [max(1, int(c * factor)) if c > 0 else 0 for c in syms]
+        scaled[ctx] = new_syms
+    return scaled
+
+
+class PPMModel:
+    """Full PPM model with PPMD-style escape mechanism.
+
+    Seed counts are scaled down so adaptive counts can take over quickly.
     """
 
-    def __init__(self, max_order=4, seed_counts=None):
+    def __init__(self, max_order=4, seed_counts=None, seed_weight=SEED_WEIGHT):
         self.max_order = max_order
         self.orders = []
         for o in range(max_order + 1):
             sc = seed_counts.get(o) if seed_counts else None
+            if sc is not None:
+                sc = _scale_seed_order(sc, seed_weight)
             self.orders.append(PPMOrder(o, sc))
         self.order_m1 = OrderMinus1()
 
