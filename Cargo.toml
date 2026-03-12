@@ -1,0 +1,16 @@
+[package]
+name = "seedac"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "seedac"
+path = "src/main.rs"
+
+[dependencies]
+blake2 = "0.10"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

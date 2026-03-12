@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  python-test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -25,4 +25,15 @@ jobs:
         run: pip install pytest
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: pytest tests/ -v --ignore=tests/conformance.rs
+
+  rust-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Rust tests
+        run: cargo test --verbose
