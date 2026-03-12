@@ -41,6 +41,10 @@ def extract_counts(model):
     for order_model in model.orders:
         order_counts = {}
         for ctx, syms in order_model.counts.items():
+            # Skip contexts with wrong length (e.g. b"" in order > 0
+            # from the start of stream before context is long enough)
+            if len(ctx) != order_model.order:
+                continue
             if any(c > 0 for c in syms):
                 order_counts[ctx] = list(syms)
         counts[order_model.order] = order_counts

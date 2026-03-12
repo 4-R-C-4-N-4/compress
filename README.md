@@ -19,6 +19,35 @@ python3 -m python.cli d input.txt.seed -o input.txt
 
 Seed ID 0 (null/uniform) is the default — pure adaptive, no prior knowledge. Use `--seed 255` to auto-detect the best seed, or `--seed N` to select a specific one.
 
+## Recipe Mode
+
+Use any file as a compression model for similar files. If two files share statistical structure, the second compresses to almost nothing.
+
+```bash
+# Create a recipe from a reference file
+python3 -m python.cli recipe reference.json -o reference.seedmodel
+
+# Compress a similar file using the recipe
+python3 -m python.cli c similar.json --recipe reference.seedmodel -o similar.seed
+
+# Decompress (same recipe required)
+python3 -m python.cli d similar.seed --recipe reference.seedmodel -o similar.json
+```
+
+The recipe captures the byte-level statistical patterns of the reference file — character frequencies, common substrings, structural regularities. When a similar file is compressed with this recipe, only the *differences* from the expected patterns need to be encoded.
+
+**When to use recipes:**
+- Config files that differ by a few values (deploy configs, env files)
+- Log batches from the same service
+- API responses with the same schema but different data
+- Versioned documents with incremental changes
+
+**How it works:** A recipe is a standard `.seedmodel` file created from a single file instead of a large corpus. It stores the same PPM probability tables as a trained seed. The `--recipe` flag overrides the built-in seed lookup, passing the recipe's counts directly to the encoder/decoder.
+
+Options:
+- `--order N` — max PPM context depth (default: 4). Higher orders capture longer patterns but produce larger recipe files.
+- `--prune N` — remove contexts seen fewer than N times (default: 1). Increase to shrink recipe size.
+
 ## Benchmark
 
 Compression ratio (lower = better). Seedac dominates on small data where traditional compressors haven't built up enough context.
@@ -166,7 +195,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-57 tests covering arithmetic coder, PPM model, seed format, codec roundtrips, training pipeline, and CLI end-to-end.
+67 tests covering arithmetic coder, PPM model, seed format, codec roundtrips, training pipeline, recipe mode, and CLI end-to-end.
 
 ## Architecture
 

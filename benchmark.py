@@ -13,6 +13,7 @@ except ImportError:
     HAS_ZSTD = False
 
 from python.codec import encode, load_seed, AUTO_SEED_ID, auto_select_seed
+from python.train import train_model, extract_counts, prune_counts, quantize_counts
 
 SEEDS_DIR = os.path.join(os.path.dirname(__file__), "seeds")
 
@@ -33,6 +34,22 @@ def bench_seedac_auto(data):
     compressed = encode(data, seed_id=best_id, seed_counts=best_counts)
     elapsed = time.perf_counter() - t0
     return len(compressed), elapsed, best_id
+
+
+def bench_seedac_recipe(data, recipe_counts):
+    t0 = time.perf_counter()
+    compressed = encode(data, seed_id=0, seed_counts=recipe_counts)
+    elapsed = time.perf_counter() - t0
+    return len(compressed), elapsed
+
+
+def make_recipe(data, max_order=4):
+    """Create seed_counts from data."""
+    model = train_model(data, max_order)
+    counts = extract_counts(model)
+    counts = prune_counts(counts, 1)
+    counts = quantize_counts(counts)
+    return counts
 
 
 def bench_zlib(data, level=6):
@@ -166,27 +183,70 @@ def make_test_data():
     return samples
 
 
+def make_recipe_pairs():
+    """Return list of (label, reference, target) for recipe benchmarks.
+
+    Each pair has a reference file (used to build the recipe) and a target
+    file (compressed with that recipe). The target is similar but not identical.
+    """
+    pairs = []
+
+    # Config files — same schema, different values
+    config_ref = b'{"server": "prod-east-1", "port": 8080, "debug": false, "workers": 4, "db": "postgres://prod:5432/app"}\n' * 20
+    config_tgt = b'{"server": "prod-west-2", "port": 9090, "debug": true, "workers": 8, "db": "postgres://prod:5432/app"}\n' * 20
+    pairs.append(("config", config_ref, config_tgt))
+
+    # Log batches — same service, different timestamps/details
+    log_ref = (
+        b"2024-01-15 10:30:00 INFO  [handler-1] GET /api/users 200 12ms\n"
+        b"2024-01-15 10:30:01 INFO  [handler-2] POST /api/login 200 45ms\n"
+        b"2024-01-15 10:30:02 WARN  [handler-3] GET /api/search 200 234ms\n"
+        b"2024-01-15 10:30:03 INFO  [handler-1] GET /api/health 200 2ms\n"
+    ) * 10
+    log_tgt = (
+        b"2024-01-16 14:22:10 INFO  [handler-4] GET /api/users 200 8ms\n"
+        b"2024-01-16 14:22:11 INFO  [handler-1] POST /api/login 401 30ms\n"
+        b"2024-01-16 14:22:12 ERROR [handler-2] GET /api/search 500 15ms\n"
+        b"2024-01-16 14:22:13 INFO  [handler-3] GET /api/health 200 1ms\n"
+    ) * 10
+    pairs.append(("log batch", log_ref, log_tgt))
+
+    # API responses — same schema, different data
+    api_ref = b''.join(
+        b'{"id": %d, "name": "User%d", "email": "user%d@example.com", "score": %d}\n' % (i, i, i, i * 10)
+        for i in range(50)
+    )
+    api_tgt = b''.join(
+        b'{"id": %d, "name": "User%d", "email": "user%d@example.com", "score": %d}\n' % (i + 100, i + 100, i + 100, i * 7)
+        for i in range(50)
+    )
+    pairs.append(("API resp", api_ref, api_tgt))
+
+    # Versioned doc — minor edits
+    doc_ref = b"The quick brown fox jumps over the lazy dog. " * 40
+    doc_tgt = b"The quick brown cat leaps over the lazy dog. " * 40
+    pairs.append(("doc edit", doc_ref, doc_tgt))
+
+    # Dissimilar — recipe from english, target is code (worst case)
+    code_tgt = b"fn main() { println!(\"hello\"); }\n" * 30
+    pairs.append(("mismatch", doc_ref, code_tgt))
+
+    return pairs
+
+
 def fmt_ratio(compressed_size, original_size):
     if original_size == 0:
         return "N/A"
     return f"{compressed_size / original_size * 100:.1f}%"
 
 
-def fmt_time(elapsed):
-    if elapsed is None:
-        return "N/A"
-    if elapsed < 0.001:
-        return f"{elapsed*1e6:.0f}us"
-    return f"{elapsed*1e3:.0f}ms"
-
-
 def main():
     samples = make_test_data()
 
-    # Header
-    zstd_col = "  zstd  " if HAS_ZSTD else ""
-    print(f"{'data':<16} {'size':>6}  {'seedac':>8} {'(seed)':>8} {'(auto)':>8}  {'zlib':>8}  {'bzip2':>8}  {zstd_col}")
-    print("-" * (90 if HAS_ZSTD else 82))
+    # --- Standard benchmark ---
+    zstd_hdr = "    zstd" if HAS_ZSTD else ""
+    print(f"{'data':<16} {'size':>6}  {'seedac':>8} {'(seed)':>8} {'(auto)':>8}  {'zlib':>8}  {'bzip2':>8}{zstd_hdr}")
+    print("-" * (88 if HAS_ZSTD else 80))
 
     for label, data in samples:
         size = len(data)
@@ -226,6 +286,32 @@ def main():
             f"{label:<16} {size:>5}B  "
             f"{best_r:>7} {seed_name:>8}  {auto_r:>7} {auto_name:>4}  "
             f"{zlib_r:>7}  {bz2_r:>8}{zstd_col}"
+        )
+
+    # --- Recipe benchmark ---
+    pairs = make_recipe_pairs()
+
+    print()
+    zstd_rhdr = f"  {'zstd':>8}" if HAS_ZSTD else ""
+    print(f"{'recipe pair':<16} {'ref':>6} {'tgt':>6}  {'recipe':>8}  {'null':>8}  {'zlib':>8}{zstd_rhdr}")
+    print("-" * (76 if HAS_ZSTD else 66))
+
+    for label, ref, tgt in pairs:
+        recipe_counts = make_recipe(ref)
+
+        recipe_size, _ = bench_seedac_recipe(tgt, recipe_counts)
+        null_size, _ = bench_seedac(tgt, seed_id=0)
+        zlib_size, _ = bench_zlib(tgt)
+        zstd_size, _ = bench_zstd(tgt)
+
+        zstd_col = f"  {fmt_ratio(zstd_size, len(tgt)):>8}" if HAS_ZSTD else ""
+
+        print(
+            f"{label:<16} {len(ref):>5}B {len(tgt):>5}B  "
+            f"{fmt_ratio(recipe_size, len(tgt)):>7}  "
+            f"{fmt_ratio(null_size, len(tgt)):>7}  "
+            f"{fmt_ratio(zlib_size, len(tgt)):>7}"
+            f"{zstd_col}"
         )
 
     if not HAS_ZSTD:
