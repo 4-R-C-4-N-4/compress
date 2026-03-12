@@ -12,7 +12,7 @@ try:
 except ImportError:
     HAS_ZSTD = False
 
-from python.codec import encode, load_seed, AUTO_SEED_ID, auto_select_seed
+from python.codec import encode, load_seed, auto_select_seed
 from python.train import train_model, extract_counts, prune_counts, quantize_counts
 
 SEEDS_DIR = os.path.join(os.path.dirname(__file__), "seeds")
@@ -30,10 +30,10 @@ def bench_seedac(data, seed_id=0):
 
 def bench_seedac_auto(data):
     t0 = time.perf_counter()
-    best_id, best_counts = auto_select_seed(data)
+    best_name, best_id, best_counts = auto_select_seed(data)
     compressed = encode(data, seed_id=best_id, seed_counts=best_counts)
     elapsed = time.perf_counter() - t0
-    return len(compressed), elapsed, best_id
+    return len(compressed), elapsed, best_name
 
 
 def bench_seedac_recipe(data, recipe_counts):
@@ -265,7 +265,7 @@ def main():
                 continue
 
         # Auto
-        auto_size, auto_time, auto_id = bench_seedac_auto(data)
+        auto_size, auto_time, auto_name = bench_seedac_auto(data)
 
         # Others
         zlib_size, zlib_time = bench_zlib(data)
@@ -273,7 +273,6 @@ def main():
         zstd_size, zstd_time = bench_zstd(data)
 
         seed_name = SEED_NAMES.get(best_manual_id, str(best_manual_id))
-        auto_name = SEED_NAMES.get(auto_id, str(auto_id))
 
         best_r = fmt_ratio(best_manual_size, size)
         auto_r = fmt_ratio(auto_size, size)
@@ -284,7 +283,7 @@ def main():
 
         print(
             f"{label:<16} {size:>5}B  "
-            f"{best_r:>7} {seed_name:>8}  {auto_r:>7} {auto_name:>4}  "
+            f"{best_r:>7} {seed_name:>8}  {auto_r:>7} {auto_name:>8}  "
             f"{zlib_r:>7}  {bz2_r:>8}{zstd_col}"
         )
 

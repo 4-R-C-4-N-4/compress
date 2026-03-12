@@ -86,7 +86,7 @@ class TestCompressDecompress:
         assert "bytes" in result.stdout
 
     def test_roundtrip_auto_seed(self, tmp_path):
-        """Compress with --seed 255 (auto), decompress, compare."""
+        """Compress with --seed auto, decompress, compare."""
         input_file = tmp_path / "input.txt"
         compressed_file = tmp_path / "input.txt.seed"
         output_file = tmp_path / "output.txt"
@@ -94,7 +94,7 @@ class TestCompressDecompress:
         original = b"The quick brown fox jumps over the lazy dog. " * 10
         input_file.write_bytes(original)
 
-        result = run_cli("c", str(input_file), "-o", str(compressed_file), "--seed", "255")
+        result = run_cli("c", str(input_file), "-o", str(compressed_file), "--seed", "auto")
         assert result.returncode == 0, f"Compress failed: {result.stderr}"
 
         result = run_cli("d", str(compressed_file), "-o", str(output_file))

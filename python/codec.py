@@ -14,9 +14,40 @@ FINGERPRINT_LEN = 8  # truncated hash
 
 SEEDS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "seeds")
 
+AUTO_PROBE_SIZE = 1024
+
 
 def _fingerprint(data: bytes) -> bytes:
     return hashlib.blake2b(data, digest_size=FINGERPRINT_LEN).digest()
+
+
+def list_seeds():
+    """Return list of (name, seed_id, max_order, counts) for all seedmodels in seeds/.
+
+    Includes all .seedmodel files regardless of seed_id, so LLM-generated
+    and user-created seeds are first-class citizens alongside shipped ones.
+    """
+    seeds = []
+    if not os.path.isdir(SEEDS_DIR):
+        return seeds
+    for fname in sorted(os.listdir(SEEDS_DIR)):
+        if not fname.endswith(".seedmodel"):
+            continue
+        path = os.path.join(SEEDS_DIR, fname)
+        try:
+            sid, name, max_order, counts = read_seed(path)
+            seeds.append((name, sid, max_order, counts))
+        except (ValueError, OSError):
+            continue
+    return seeds
+
+
+def load_seed_by_name(name):
+    """Load a seedmodel by its name field. Returns (seed_id, max_order, counts) or None."""
+    for sname, sid, max_order, counts in list_seeds():
+        if sname == name:
+            return sid, max_order, counts
+    return None
 
 
 def load_seed(seed_id):
@@ -27,48 +58,13 @@ def load_seed(seed_id):
     """
     if seed_id == 0:
         return None
-
-    # Search seeds/ directory for a file with matching seed_id
-    if not os.path.isdir(SEEDS_DIR):
-        return None
-
-    for fname in os.listdir(SEEDS_DIR):
-        if not fname.endswith(".seedmodel"):
-            continue
-        path = os.path.join(SEEDS_DIR, fname)
-        try:
-            file_seed_id, _, _, counts = read_seed(path)
-            if file_seed_id == seed_id:
-                return counts
-        except (ValueError, OSError):
-            continue
-
+    for _, sid, _, counts in list_seeds():
+        if sid == seed_id:
+            return counts
     return None
 
 
-AUTO_SEED_ID = 255
-AUTO_PROBE_SIZE = 1024
-
-
-def _list_seeds():
-    """Return list of (seed_id, counts) for all available seeds."""
-    seeds = [(0, None)]
-    if not os.path.isdir(SEEDS_DIR):
-        return seeds
-    for fname in os.listdir(SEEDS_DIR):
-        if not fname.endswith(".seedmodel"):
-            continue
-        path = os.path.join(SEEDS_DIR, fname)
-        try:
-            sid, _, _, counts = read_seed(path)
-            if sid != 0:
-                seeds.append((sid, counts))
-        except (ValueError, OSError):
-            continue
-    return seeds
-
-
-def _probe_size(data, max_order, seed_id, seed_counts):
+def _probe_size(data, max_order, seed_counts):
     """Encode data and return compressed bitstream length in bytes."""
     model = PPMModel(max_order=max_order, seed_counts=seed_counts)
     enc = Encoder()
@@ -80,34 +76,64 @@ def _probe_size(data, max_order, seed_id, seed_counts):
 
 
 def auto_select_seed(data, max_order=4):
-    """Try all available seeds on a probe of data, return (best_seed_id, best_seed_counts)."""
+    """Try all available seeds on a probe of data.
+
+    Returns (best_name, best_seed_id, best_seed_counts).
+    best_name is "null" if no seed beats adaptive-only.
+    """
     probe = data[:AUTO_PROBE_SIZE]
     if not probe:
-        return 0, None
+        return "null", 0, None
 
+    best_name = "null"
     best_id = 0
     best_counts = None
-    best_size = _probe_size(probe, max_order, 0, None)
+    best_size = _probe_size(probe, max_order, None)
 
-    for sid, counts in _list_seeds():
-        if sid == 0:
+    for name, sid, _, counts in list_seeds():
+        if name == "null":
             continue
-        size = _probe_size(probe, max_order, sid, counts)
+        size = _probe_size(probe, max_order, counts)
         if size < best_size:
             best_size = size
+            best_name = name
             best_id = sid
             best_counts = counts
 
-    return best_id, best_counts
+    return best_name, best_id, best_counts
 
 
-def encode(data: bytes, seed_id: int = 0, max_order: int = 4, seed_counts=None) -> bytes:
+def resolve_seed(seed_arg):
+    """Resolve a --seed argument (name, numeric ID, or 'auto').
+
+    Returns (seed_id, seed_counts, is_auto).
+    """
+    if seed_arg == "auto":
+        return 0, None, True
+
+    # Try as numeric ID
+    try:
+        sid = int(seed_arg)
+        return sid, load_seed(sid), False
+    except ValueError:
+        pass
+
+    # Try as name
+    result = load_seed_by_name(seed_arg)
+    if result is not None:
+        sid, _, counts = result
+        return sid, counts, False
+
+    raise ValueError(f"Unknown seed: {seed_arg!r} (not a known ID or name)")
+
+
+def encode(data: bytes, seed_id: int = 0, max_order: int = 4, seed_counts=None, auto=False) -> bytes:
     """Compress data into .seed format.
 
-    If seed_id=255 (auto), probes all available seeds and picks the best.
+    If auto=True, probes all available seeds and picks the best.
     """
-    if seed_id == AUTO_SEED_ID:
-        seed_id, seed_counts = auto_select_seed(data, max_order)
+    if auto:
+        _, seed_id, seed_counts = auto_select_seed(data, max_order)
     if seed_counts is None:
         seed_counts = load_seed(seed_id)
     model = PPMModel(max_order=max_order, seed_counts=seed_counts)

@@ -4,7 +4,7 @@ import argparse
 import sys
 import os
 
-from .codec import encode, decode
+from .codec import encode, decode, resolve_seed, auto_select_seed, list_seeds
 from .seed_format import read_seed, write_seed
 from .train import train_model, extract_counts, prune_counts, quantize_counts
 
@@ -21,7 +21,8 @@ def main():
     c.add_argument("input", help="Input file path")
     c.add_argument("-o", "--output", help="Output file path (default: input.seed)")
     c.add_argument("--order", type=int, default=None, help="Max PPM order (default: 4, or recipe's order)")
-    c.add_argument("--seed", type=int, default=0, help="Seed ID (default: 0 = null/uniform, 255 = auto-detect)")
+    c.add_argument("--seed", default="auto",
+                   help="Seed: 'auto' (default), a name (english, k8s), or numeric ID")
     c.add_argument("--recipe", help="Path to a .seedmodel recipe file")
 
     # Decompress
@@ -37,32 +38,46 @@ def main():
     r.add_argument("--order", type=int, default=4, help="Max PPM order (default: 4)")
     r.add_argument("--prune", type=int, default=1, help="Min total count per context (default: 1)")
 
+    # List seeds
+    sub.add_parser("seeds", help="List available seed models")
+
     args = parser.parse_args()
 
     if args.command == "c":
-        if args.recipe and args.seed != 0:
+        if args.recipe and args.seed != "auto":
             print("Error: cannot use --seed and --recipe together", file=sys.stderr)
             sys.exit(1)
 
         seed_counts = None
         max_order = args.order or 4
+        is_auto = False
 
         if args.recipe:
             _, _, recipe_order, seed_counts = read_seed(args.recipe)
             if args.order is None:
                 max_order = recipe_order
+            seed_id = 0
+        else:
+            seed_id, seed_counts, is_auto = resolve_seed(args.seed)
 
         with open(args.input, "rb") as f:
             data = f.read()
 
-        compressed = encode(data, seed_id=args.seed, max_order=max_order, seed_counts=seed_counts)
+        if is_auto:
+            best_name, seed_id, seed_counts = auto_select_seed(data, max_order)
+            compressed = encode(data, seed_id=seed_id, max_order=max_order, seed_counts=seed_counts)
+        else:
+            compressed = encode(data, seed_id=seed_id, max_order=max_order, seed_counts=seed_counts)
 
         out_path = args.output or args.input + ".seed"
         with open(out_path, "wb") as f:
             f.write(compressed)
 
         ratio = len(compressed) / len(data) * 100 if data else 0
-        print(f"{len(data)} -> {len(compressed)} bytes ({ratio:.1f}%)")
+        if is_auto:
+            print(f"{len(data)} -> {len(compressed)} bytes ({ratio:.1f}%) [seed: {best_name}]")
+        else:
+            print(f"{len(data)} -> {len(compressed)} bytes ({ratio:.1f}%)")
 
     elif args.command == "d":
         with open(args.input, "rb") as f:
@@ -109,6 +124,17 @@ def main():
 
         file_size = os.path.getsize(out_path)
         print(f"Wrote {out_path} ({file_size} bytes)")
+
+    elif args.command == "seeds":
+        seeds = list_seeds()
+        if not seeds:
+            print("No seed models found in seeds/")
+            return
+        print(f"{'name':<20} {'id':>4} {'order':>6} {'file'}")
+        print("-" * 60)
+        for name, sid, max_order, counts in seeds:
+            total_contexts = sum(len(oc) for oc in counts.values())
+            print(f"{name:<20} {sid:>4} {max_order:>6} {total_contexts:>6} contexts")
 
 
 if __name__ == "__main__":

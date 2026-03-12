@@ -6,7 +6,7 @@ import random
 import hashlib
 import pytest
 
-from python.codec import encode, decode, load_seed, auto_select_seed, MAGIC, SEPARATOR, FINGERPRINT_LEN, AUTO_SEED_ID
+from python.codec import encode, decode, load_seed, load_seed_by_name, auto_select_seed, resolve_seed, MAGIC, SEPARATOR, FINGERPRINT_LEN
 
 
 class TestFixedRoundtrip:
@@ -66,61 +66,72 @@ class TestHeaderStructure:
         data = b"test data for header"
         compressed = encode(data, seed_id=0, max_order=3)
 
-        # Magic
         assert compressed[:4] == MAGIC
-
-        # seed_id
         assert compressed[4] == 0
-
-        # order
         assert compressed[5] == 3
-
-        # byte_length
         byte_length = struct.unpack("<I", compressed[6:10])[0]
         assert byte_length == len(data)
-
-        # fingerprint
         fp = compressed[10:10 + FINGERPRINT_LEN]
         expected_fp = hashlib.blake2b(data, digest_size=FINGERPRINT_LEN).digest()
         assert fp == expected_fp
-
-        # separator
         sep_start = 10 + FINGERPRINT_LEN
         assert compressed[sep_start:sep_start + 3] == SEPARATOR
 
 
 class TestAutoDetect:
-    def test_auto_picks_seed_and_roundtrips(self):
-        """seed_id=255 auto-selects a seed and roundtrips correctly."""
+    def test_auto_roundtrips(self):
+        """Auto-select picks a seed and roundtrips correctly."""
         data = b"The quick brown fox jumps over the lazy dog. " * 20
-        compressed = encode(data, seed_id=AUTO_SEED_ID)
+        compressed = encode(data, auto=True)
         result = decode(compressed)
         assert result == data
 
-    def test_auto_picks_english_for_prose(self):
-        """Auto-detect should prefer english seed for English text."""
+    def test_auto_returns_name(self):
+        """auto_select_seed returns a name, not just an ID."""
         data = b"It was the best of times, it was the worst of times. " * 20
-        best_id, _ = auto_select_seed(data)
-        # Should pick english (1) over null (0)
-        assert best_id != 0
+        best_name, best_id, _ = auto_select_seed(data)
+        assert isinstance(best_name, str)
 
     def test_auto_roundtrip_empty(self):
-        """Auto-detect on empty data falls back to seed 0."""
-        compressed = encode(b"", seed_id=AUTO_SEED_ID)
+        """Auto-detect on empty data falls back to null."""
+        compressed = encode(b"", auto=True)
         result = decode(compressed)
         assert result == b""
-        # Header should have seed_id=0
         assert compressed[4] == 0
 
     def test_auto_header_stores_chosen_seed(self):
-        """The header should store the actual chosen seed, not 255."""
+        """The header stores the actual chosen seed ID."""
         data = b"Hello world! " * 100
-        compressed = encode(data, seed_id=AUTO_SEED_ID)
-        stored_id = compressed[4]
-        assert stored_id != AUTO_SEED_ID
-        # Should decode fine without any special handling
+        compressed = encode(data, auto=True)
         result = decode(compressed)
         assert result == data
+
+
+class TestResolveSeed:
+    def test_resolve_auto(self):
+        """'auto' resolves with is_auto=True."""
+        sid, counts, is_auto = resolve_seed("auto")
+        assert is_auto is True
+
+    def test_resolve_numeric(self):
+        """Numeric string resolves to seed ID."""
+        sid, counts, is_auto = resolve_seed("0")
+        assert sid == 0
+        assert is_auto is False
+
+    def test_resolve_name(self):
+        """Name resolves to seed counts."""
+        result = load_seed_by_name("english")
+        if result is None:
+            pytest.skip("english.seedmodel not found")
+        sid, counts, is_auto = resolve_seed("english")
+        assert is_auto is False
+        assert counts is not None
+
+    def test_resolve_unknown(self):
+        """Unknown name raises ValueError."""
+        with pytest.raises(ValueError, match="Unknown seed"):
+            resolve_seed("nonexistent_seed_xyz")
 
 
 class TestErrorCases:
@@ -133,7 +144,6 @@ class TestErrorCases:
         """Truncated compressed data should fail (fingerprint mismatch or struct error)."""
         data = b"hello world"
         compressed = encode(data, seed_id=0)
-        # Truncate the bitstream
         truncated = compressed[:20]
         with pytest.raises((ValueError, struct.error)):
             decode(truncated)
@@ -142,7 +152,6 @@ class TestErrorCases:
         """Modified data should fail fingerprint check."""
         data = b"hello world"
         compressed = bytearray(encode(data, seed_id=0))
-        # Corrupt the fingerprint
         compressed[10] ^= 0xFF
         with pytest.raises(ValueError, match="Fingerprint mismatch"):
             decode(bytes(compressed))
